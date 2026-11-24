@@ -3,7 +3,8 @@
 ## Machines
 - Local: MacBook M4, macOS, no NVIDIA GPU. Isaac Sim cannot run locally.
 - Cloud: Google Colab via the colab CLI (https://github.com/googlecolab/google-colab-cli).
-  Session name "trainer", GPU L4 only (Isaac Sim needs RT cores; never A100/H100).
+  Session name "trainer". Prefer L4. High-memory T4 is allowed as a fallback.
+  Isaac Sim needs RT cores. Never use A100 or H100.
 
 ## Goals (priority order)
 1. Colab: train Regrind-WujiHand-Screwdriver-v0 exactly as released.
