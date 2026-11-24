@@ -1,6 +1,6 @@
 # Presentation demo progress
 
-- [ ] Part 2. Colab L4 provisioning blocked. No training or Colab replay.
+- [ ] Part 2. Project authentication verified. L4 provisioning timed out. No training or Colab replay.
 - [x] Part 3. Local comparison and MuJoCo renders complete.
 - [ ] Part 4. Waiting for “morning”.
 
@@ -8,7 +8,8 @@
 
 - This checkout was on `main` with upstream `origin`. Created `presentation-demo` and pushed to `ReyZix/regrind` via remote `fork`.
 - Installed Colab CLI 0.8.0 under Python 3.12. The project `.envrc` was absent. Both local ADC attempts returned “Backend rejected accelerator 'L4'”, and CLI OAuth required browser consent. `colab --auth adc stop -s trainer` found no session. No training ETA. REGRIND is configured for 20,000 iterations.
-- Follow-up verified CLI 0.8.0 was current. The ambient ADC lacked the `colaboratory` scope and showed 0.00 compute units. The repo wrapper now uses dedicated ADC under `~/.colab-regrind/gcloud` and sessions at `~/.colab-regrind/sessions.json`. The ignored `.envrc` is installed and trusted by direnv. Project ADC is waiting for browser consent, so compute balance and L4 availability on the intended account are unverified.
+- CLI 0.8.0 was current. The old ambient ADC lacked the `colaboratory` scope and showed 0.00 compute units. The repo wrapper uses dedicated ADC under `~/.colab-regrind/gcloud` and sessions at `~/.colab-regrind/sessions.json`. The new ADC has the `colaboratory` and email scopes. `./bin/colab usage` reported 472.04 compute units and no active assignments before provisioning on Nov 23.
+- Allocated and terminated temporary CPU and T4 sessions using the isolated ADC. The first L4 request exhausted its retries with a Colab HTTP read timeout. A second L4 request with a 240-second read timeout also failed. `./bin/colab stop -s trainer` found no trainer, and the final account check showed zero active assignments and 472.04 compute units.
 - Sign in from this checkout with `direnv exec . gcloud auth application-default login --disable-quota-project --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`. Then use `./bin/colab usage` and the requested runtime checks. Stop each temporary session after its check. The trainer still requires L4.
 - VM target is `/content/regrind` on branch `presentation-demo`, Python 3.11 at `.venv/bin/python`, Isaac Sim 5.1.0, and Isaac Lab v2.3.0 with `rsl_rl`. Follow the [versioned pip installation docs](https://isaac-sim.github.io/IsaacLab/v2.3.0/source/setup/installation/pip_installation.html). Run the task listing, 16-environment zero-agent smoke, and timed 4096-environment training smoke before the full launch. Use 2048 for a confirmed out-of-memory failure.
 - After smoke tests, mount Drive and launch from the Mac with `nohup caffeinate -dims ./bin/colab exec --timeout 0 -s trainer -f tools/run_training.py > logs/colab_train.log 2>&1 &`. Add `--env REGRIND_NUM_ENVS=2048` to the exec options if needed. Colab CLI 0.8.0 defaults to a 30-second output timeout. The runner stays in the active kernel, prints short logs, and backs up every 30 minutes to Drive with the latest five checkpoints plus the highest logged training-reward checkpoint. Local backup and retention checks passed with synthetic TensorBoard data. GPU training and the Drive mount still need live verification.
