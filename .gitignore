@@ -74,4 +74,22 @@ tests/
 slurm_out/
 scripts/slurm/
 
-CLAUDE.md
+# Presentation development
+.envrc
+logs/
+checkpoints/
+.venv/
+__pycache__/
+*.h5
+!/data/arctic_demo/arctic_leap_scissors/demo_30fps.h5
+!/data/arctic_demo/arctic_leap_scissors/demo_interp_120fps.h5
+!/data/arctic_demo/arctic_leap_scissors_2x/demo_30fps.h5
+!/data/arctic_demo/arctic_leap_scissors_2x/demo_interp_120fps.h5
+!/data/retargeted_traj/leaphand/scissors_2x/retargeted_120fps.h5
+!/data/retargeted_traj/leaphand/screwdriver_1.5x/retargeted_120fps.h5
+!/data/retargeted_traj/wujihand/scissors/retargeted_120fps.h5
+!/data/retargeted_traj/wujihand/screwdriver/retargeted_120fps.h5
+!/data/zed_mocap_demo/screwdriver/demo_30fps.h5
+!/data/zed_mocap_demo/screwdriver/demo_interp_120fps.h5
+!/data/zed_mocap_demo/screwdriver_1_5x/demo_30fps.h5
+!/data/zed_mocap_demo/screwdriver_1_5x/demo_interp_120fps.h5
