@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "topo"))
 from compare import load_demo, make_retargeter
-from variants import DemoRetargeter
+from variants import DemoRetargeter, PENETRATION_CAP
 
 REFERENCE = ROOT / "data/retargeted_traj/wujihand/screwdriver/retargeted_120fps.h5"
 OUTPUT = ROOT / "demo_assets/02_retarget_comparison.md"
@@ -27,17 +27,34 @@ NEAR = 0.01
 class Measurements:
     def __init__(self):
         self.retargeter = make_retargeter(DemoRetargeter, variant="topo")
+        hand = self.retargeter
+        self.finger_by_geometry = {}
+        for index in hand.plant.GetBodyIndices(hand.wrist.body().model_instance()):
+            body = hand.plant.get_body(index)
+            if body.name().startswith("right_finger"):
+                finger = body.name().split("_")[1]
+                for geometry in hand.plant.GetCollisionGeometriesForBody(body):
+                    self.finger_by_geometry[geometry] = finger
 
-    def penetration(self, q):
+    def collision_depths(self, q):
+        """Return peak hand-object, inter-finger, and all hand self-overlap in meters."""
         hand = self.retargeter
         hand.plant.SetPositions(hand.plant_context, q)
-        pairs = hand.query_object.ComputeSignedDistancePairwiseClosestPoints(0.0)
-        return max(
-            (-pair.distance for pair in pairs
-             if bool({pair.id_A, pair.id_B} & hand.object_geometries)
-             and not {pair.id_A, pair.id_B} & hand.table_geometries),
-            default=0.0,
-        )
+        object_overlap = finger_overlap = self_overlap = 0.0
+        for pair in hand.query_object.ComputeSignedDistancePairwiseClosestPoints(0.0):
+            geometries = {pair.id_A, pair.id_B}
+            if geometries & hand.table_geometries:
+                continue
+            depth = -pair.distance
+            if geometries & hand.object_geometries:
+                object_overlap = max(object_overlap, depth)
+            else:
+                self_overlap = max(self_overlap, depth)
+                first = self.finger_by_geometry.get(pair.id_A)
+                second = self.finger_by_geometry.get(pair.id_B)
+                if first and second and first != second:
+                    finger_overlap = max(finger_overlap, depth)
+        return object_overlap, finger_overlap, self_overlap
 
     def near_contact(self, q, source):
         hand = self.retargeter
@@ -65,7 +82,7 @@ def report(topo_run=None):
     motions = []
     times = []
     fallbacks = []
-    runs = RUNS if topo_run is None else (*RUNS, (topo_run, "TopoRetarget-lite"))
+    runs = RUNS if topo_run is None else (*RUNS, (topo_run, "TopoRetarget-lite (soft self)"))
     for variant, _ in runs:
         with np.load(LOGS / f"{variant}.npz") as data:
             q = data["motion"]
@@ -84,7 +101,11 @@ def report(topo_run=None):
         raise ValueError("No source points meet the near-contact threshold")
 
     keypoints = [measurement.keypoints(motion) for motion in motions]
-    penetration = np.array([[1000 * measurement.penetration(q) for q in motion] for motion in motions])
+    depths = np.array([[measurement.collision_depths(q) for q in motion] for motion in motions])
+    if topo_run is not None and depths[-1].max() > PENETRATION_CAP + 1e-6:
+        raise ValueError(f"{topo_run} exceeded the penetration cap in the scored trajectory")
+    penetration = 1000 * depths[:, :, 0]
+    peak_finger_overlap = 1000 * depths[:, :, 1].max(axis=1)
     object_rot = Rotation.from_quat(objects[:, :4], scalar_first=True).as_matrix()
     drifts = [1000 * np.linalg.norm(np.einsum("tji,tkj->tki", object_rot, points - source), axis=2)
               for points in keypoints]
@@ -108,11 +129,20 @@ def report(topo_run=None):
                                      Rotation.from_quat(ref["object_quat"][:], scalar_first=True)).magnitude())
         source_mm = 1000 * np.linalg.norm(human - ref["mano_joint_coords"][:], axis=2)
 
-    rows = [
-        f"| {label} | {fallback:.1%} | {depth.mean():.2f} | {depth.max():.2f} | "
-        f"{100 * (depth > 2).mean():.1f}% | {drift:.2f} | {elapsed:.1f} |"
-        for (_, label), fallback, depth, drift, elapsed in zip(runs, fallbacks, penetration, mean_drift, times)
-    ]
+    rows = []
+    for i, (_, label) in enumerate(runs):
+        depth = penetration[i]
+        overlap = "" if topo_run is None else f" {peak_finger_overlap[i]:.2f} |"
+        rows.append(
+            f"| {label} | {fallbacks[i]:.1%} | {depth.mean():.2f} | {depth.max():.2f} | "
+            f"{100 * (depth > 2).mean():.1f}% |{overlap} {mean_drift[i]:.2f} | {times[i]:.1f} |"
+        )
+    overlap_header = "" if topo_run is None else "Max finger self-penetration (mm) | "
+    overlap_rule = "" if topo_run is None else "---:|"
+    overlap_definition = (
+        "Finger self-penetration is the largest overlap Drake reports between distinct fingers across the sequence. "
+        if topo_run is not None else ""
+    )
     interpretation = (
         f"Mean near-contact drift was {mean_drift[1]:.2f} mm with released REGRIND, "
         f"{mean_drift[2]:.2f} mm with weighted Laplacian, and {mean_drift[3]:.2f} mm with soft penetration alone. "
@@ -121,7 +151,9 @@ def report(topo_run=None):
         "The replay uses the recorded screwdriver motion in every panel."
     )
     full_variant = (
-        f"The accepted TopoRetarget-lite run has ID `{topo_run}`."
+        f"TopoRetarget-lite with soft self-collision had {fallbacks[-1]:.1%} fallbacks, "
+        f"{mean_drift[-1]:.2f} mm mean drift, and {peak_finger_overlap[-1]:.2f} mm peak "
+        f"finger-to-finger overlap. The original hard-self-collision run fell back on 834 of 1,081 frames."
         if topo_run else
         "The original full TopoRetarget-lite run fell back on 834 of 1,081 frames (77.2%). "
         "The full-variant retries also exceeded the 5% threshold. See PROGRESS.md for the feasibility probes."
@@ -130,13 +162,14 @@ def report(topo_run=None):
         "# WujiHand screwdriver retargeting comparison\n\n"
         f"One REGRIND demonstration, {len(human):,} frames at 120 fps. All runs used Drake Clarabel on the Mac.\n\n"
         "| Variant | Fallback rate | Mean penetration (mm) | Max penetration (mm) | Frames over 2 mm | "
-        "Mean near-contact drift (mm) | Mean solve time (ms/frame) |\n"
-        "|---|---:|---:|---:|---:|---:|---:|\n" + "\n".join(rows) + "\n\n"
+        f"{overlap_header}Mean near-contact drift (mm) | Mean solve time (ms/frame) |\n"
+        f"|---|---:|---:|---:|---:|{overlap_rule}---:|---:|\n" + "\n".join(rows) + "\n\n"
         + interpretation + " " + full_variant + "\n\n"
         "Fallback counts a frame if its initial refinement fails and restarts from the previous collision-aware pose. "
         "The comparison includes runs below 5%. "
         "Penetration is the deepest signed-distance overlap of a hand–screwdriver collision pair "
         "in Drake’s collision geometry, with zero for a frame without overlap. "
+        f"{overlap_definition}"
         "The drift is the mean Euclidean error in screwdriver "
         "coordinates over mapped source keypoints within 10 mm of the collision surface "
         f"({near.sum():,} point-frames). Solve time is elapsed retargeting time per frame, "

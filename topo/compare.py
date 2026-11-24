@@ -91,6 +91,8 @@ if __name__ == "__main__":
     parser.add_argument("--frames", type=int)
     parser.add_argument("--run-id")
     parser.add_argument("--slack-penalty", type=float, default=1e5)
+    parser.add_argument("--self-slack-penalty", type=float,
+                        help="Enable bounded hand self-collision slack in TopoRetarget-lite")
     parser.add_argument("--hinge", action="store_true")
     parser.add_argument("--baseline-weights", action="store_true")
     parser.add_argument("--probe-failures", action="store_true")
@@ -101,6 +103,12 @@ if __name__ == "__main__":
         parser.error("--run-id must use lowercase letters, digits, hyphens or underscores")
     if not np.isfinite(args.slack_penalty) or args.slack_penalty <= 0:
         parser.error("--slack-penalty must be positive and finite")
+    if args.self_slack_penalty is not None:
+        if args.variant != "topo":
+            parser.error("--self-slack-penalty requires the topo variant")
+        if not np.isfinite(args.self_slack_penalty) or args.self_slack_penalty <= 0:
+            parser.error("--self-slack-penalty must be positive and finite")
     sys.breakpointhook = abort_failed_baseline_solve
     run(args.variant, args.frames, run_id=args.run_id, slack_penalty=args.slack_penalty,
+        self_slack_penalty=args.self_slack_penalty,
         hinge=args.hinge, baseline_weights=args.baseline_weights, probe_failures=args.probe_failures)

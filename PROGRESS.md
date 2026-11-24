@@ -18,3 +18,9 @@
 - Reran IK, baseline, weighted Laplacian, and soft-only across all 1,081 frames with zero fallbacks. Weighted Laplacian had the lowest mean near-contact drift (4.78 mm). Soft-only had 1.01 mm peak penetration and 5.34 mm drift. Regenerated the table, verified the 271-frame comparison video decodes end to end, and inspected the keyframe at 1.33 seconds.
 - Reproduce the four accepted runs with `~/work/.venv/bin/python topo/compare.py VARIANT` for `baseline`, `ik`, `weighted`, and `soft`. Then run `tools/measure_retargeting.py` and `tools/render_comparison.py comparison` with the same interpreter. Use `tools/render_comparison.py reference` for the shipped backup.
 - Reproduce the full-variant pilots with `topo/compare.py topo --frames 150 --probe-failures` and one of `--slack-penalty 1000`, `--slack-penalty 10000`, `--hinge`, or `--baseline-weights`. Use a unique `--run-id` for each. Per-frame solver statuses and raw trajectories live in ignored `logs/`.
+
+## Full variant with soft hand self-collision
+
+- Run `~/work/.venv/bin/python topo/compare.py topo --self-slack-penalty 100000 --run-id topo-self-100000`. Hand self-collision and hand-object collision each use a 1 mm soft tolerance and 30 mm bound. The option changes only the self-collision penalty. A fixed-pose check verified the slack bound, independent penalties, and hard table contact.
+- The `1e5` run passed in 309.26 s with 29/1,081 fallbacks (2.68%). All 29 were Clarabel solver-specific errors on initial refinement, and every retry solved. Peak finger-to-finger and all-hand self-penetration were both 1.17 mm. Peak hand–object penetration was 1.10 mm. Mean near-contact drift was 19.71 mm versus 5.34 mm for REGRIND.
+- Added the full variant and peak finger self-penetration column with `tools/measure_retargeting.py --topo-run topo-self-100000`. Regenerated the comparison video and keyframe with `tools/render_comparison.py comparison`. The five-panel video decoded across all 271 frames.

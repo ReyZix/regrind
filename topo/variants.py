@@ -59,11 +59,12 @@ def add_residual(prog, variables, jacobian, residual, weight):
 
 
 class DemoRetargeter(HandInteractionMeshOneStageRetargeter):
-    def __init__(self, *, variant, slack_penalty=1e5, hinge=False, baseline_weights=False,
-                 probe_failures=False, **kwargs):
+    def __init__(self, *, variant, slack_penalty=1e5, self_slack_penalty=None, hinge=False,
+                 baseline_weights=False, probe_failures=False, **kwargs):
         super().__init__(**kwargs)
         self.variant = variant
         self.slack_penalty = slack_penalty
+        self.self_slack_penalty = self_slack_penalty
         self.hinge = hinge
         self.baseline_weights = baseline_weights
         self.probes_left = 3 if probe_failures else 0
@@ -106,16 +107,21 @@ class DemoRetargeter(HandInteractionMeshOneStageRetargeter):
                 continue
             jacobian = jacobians[pair][self.q_a_indices]
             variables = delta
+            penalty = None
             if self.variant in ("soft", "topo") and object_pair:
+                penalty = self.slack_penalty
+            if self.variant == "topo" and not object_pair and not table_pair:
+                penalty = self.self_slack_penalty
+            if penalty is not None:
                 slack = prog.NewContinuousVariables(1, "penetration")
-                if self.hinge:
+                if self.hinge and object_pair:
                     # Epigraph of max(0, -tau - phi), whose square is penalized.
                     # The hard distance bound is independent of the epigraph variable.
                     prog.AddLinearConstraint(jacobian, -distance - PENETRATION_CAP, np.inf, delta)
                     prog.AddBoundingBoxConstraint(0.0, np.inf, slack)
                 else:
                     prog.AddBoundingBoxConstraint(0.0, PENETRATION_CAP - TAU, slack)
-                prog.AddQuadraticCost(np.array([[self.slack_penalty]]), np.zeros(1), slack)
+                prog.AddQuadraticCost(np.array([[penalty]]), np.zeros(1), slack)
                 jacobian = np.r_[jacobian, 1.0]
                 variables = np.r_[delta, slack]
             binding = prog.AddLinearConstraint(jacobian, -distance - TAU, np.inf, variables)
