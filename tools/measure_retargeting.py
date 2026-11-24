@@ -1,4 +1,5 @@
-"""Measure the four retargeted trajectories and write the presentation table."""
+"""Measure accepted retargeting runs and write the presentation table."""
+import argparse
 from pathlib import Path
 import sys
 
@@ -8,13 +9,18 @@ from scipy.spatial.transform import Rotation
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "topo"))
-from compare import VARIANTS, load_demo, make_retargeter
+from compare import load_demo, make_retargeter
 from variants import DemoRetargeter
 
 REFERENCE = ROOT / "data/retargeted_traj/wujihand/screwdriver/retargeted_120fps.h5"
 OUTPUT = ROOT / "demo_assets/02_retarget_comparison.md"
 LOGS = ROOT / "logs"
-LABELS = ("Keypoint IK", "Released REGRIND + Clarabel", "REGRIND + weighted Laplacian", "TopoRetarget-lite")
+RUNS = (
+    ("ik", "Keypoint IK"),
+    ("baseline", "REGRIND + Clarabel"),
+    ("weighted", "Weighted Laplacian"),
+    ("soft", "Soft penetration only"),
+)
 NEAR = 0.01
 
 
@@ -52,14 +58,15 @@ class Measurements:
         return np.array([hand._get_robot_link_positions(q, names) for q in mot])
 
 
-def report():
+def report(topo_run=None):
     _, human, objects, _ = load_demo()
     measurement = Measurements()
     source = human[:, measurement.retargeter.mano_mapped_joint_indices]
     motions = []
     times = []
-    rejected_seeds = 0
-    for variant in VARIANTS:
+    fallbacks = []
+    runs = RUNS if topo_run is None else (*RUNS, (topo_run, "TopoRetarget-lite"))
+    for variant, _ in runs:
         with np.load(LOGS / f"{variant}.npz") as data:
             q = data["motion"]
             if q.shape != (len(human), measurement.retargeter.nq) or not np.isfinite(q).all():
@@ -67,8 +74,10 @@ def report():
             np.testing.assert_allclose(q[:, -7:], objects, atol=1e-10)
             motions.append(q)
             times.append(float(data["elapsed"]) * 1000 / len(human))
-            if variant == "topo":
-                rejected_seeds = int(data["rejected_seeds"])
+            rate = int(data["rejected_seeds"]) / len(human)
+            if rate >= 0.05:
+                raise ValueError(f"{variant} exceeds the fallback threshold ({rate:.1%})")
+            fallbacks.append(rate)
 
     near = np.array([measurement.near_contact(q, points) for q, points in zip(motions[1], source)])
     if not near.any():
@@ -81,7 +90,8 @@ def report():
               for points in keypoints]
     mean_drift = [drift[near].mean() for drift in drifts]
     np.savez(LOGS / "retarget_metrics.npz", penetration=penetration,
-             drift=np.array(drifts), near=near)
+             drift=np.array(drifts), near=near, run_ids=[name for name, _ in runs],
+             labels=[label for _, label in runs])
 
     baseline = motions[1]
     with h5py.File(REFERENCE) as ref:
@@ -99,32 +109,35 @@ def report():
         source_mm = 1000 * np.linalg.norm(human - ref["mano_joint_coords"][:], axis=2)
 
     rows = [
-        f"| {label} | {depth.max():.2f} | {100 * (depth > 2).mean():.1f}% | {drift:.2f} | {elapsed:.1f} |"
-        for label, depth, drift, elapsed in zip(LABELS, penetration, mean_drift, times)
+        f"| {label} | {fallback:.1%} | {depth.mean():.2f} | {depth.max():.2f} | "
+        f"{100 * (depth > 2).mean():.1f}% | {drift:.2f} | {elapsed:.1f} |"
+        for (_, label), fallback, depth, drift, elapsed in zip(runs, fallbacks, penetration, mean_drift, times)
     ]
-    weighted_change = mean_drift[2] - mean_drift[1]
-    topo_change = mean_drift[3] - mean_drift[1]
-    weighted_direction = "lower" if weighted_change < 0 else "higher"
-    topo_direction = "lower" if topo_change < 0 else "higher"
     interpretation = (
-        f"Relative to released REGRIND, the weighted Laplacian produced {abs(weighted_change):.2f} mm "
-        f"{weighted_direction} mean contact drift and TopoRetarget-lite produced {abs(topo_change):.2f} mm "
-        f"{topo_direction} drift. The slack variant allowed up to {penetration[3].max():.2f} mm "
-        f"measured overlap, compared with {penetration[1].max():.2f} mm for the hard-constraint baseline. "
-        "TopoRetarget-lite also changes the sample count and adds bone matching and stronger temporal "
-        "regularization, so its row measures the combined effect on this demonstration. "
-        f"Its bone-only seed caused an infeasible subproblem on {rejected_seeds:,} of {len(human):,} frames. "
-        "Those frames started refinement again from the previous collision-aware pose, with the bone prior active. "
+        f"Mean near-contact drift was {mean_drift[1]:.2f} mm with released REGRIND, "
+        f"{mean_drift[2]:.2f} mm with weighted Laplacian, and {mean_drift[3]:.2f} mm with soft penetration alone. "
+        f"Soft penetration alone completed every frame and reached {penetration[3].max():.2f} mm peak overlap. "
+        "It retains REGRIND’s uniform interaction graph and objective weights and uses the original slack penalty. "
         "The replay uses the recorded screwdriver motion in every panel."
+    )
+    full_variant = (
+        f"The accepted TopoRetarget-lite run has ID `{topo_run}`."
+        if topo_run else
+        "The original full TopoRetarget-lite run fell back on 834 of 1,081 frames (77.2%). "
+        "The full-variant retries also exceeded the 5% threshold. See PROGRESS.md for the feasibility probes."
     )
     OUTPUT.write_text(
         "# WujiHand screwdriver retargeting comparison\n\n"
-        f"One REGRIND demonstration, {len(human):,} frames at 120 fps. All four runs used Drake Clarabel on the Mac.\n\n"
-        "| Variant | Max penetration (mm) | Frames over 2 mm | Mean near-contact drift (mm) | Mean solve time (ms/frame) |\n"
-        "|---|---:|---:|---:|---:|\n" + "\n".join(rows) + "\n\n"
-        + interpretation + "\n\n"
+        f"One REGRIND demonstration, {len(human):,} frames at 120 fps. All runs used Drake Clarabel on the Mac.\n\n"
+        "| Variant | Fallback rate | Mean penetration (mm) | Max penetration (mm) | Frames over 2 mm | "
+        "Mean near-contact drift (mm) | Mean solve time (ms/frame) |\n"
+        "|---|---:|---:|---:|---:|---:|---:|\n" + "\n".join(rows) + "\n\n"
+        + interpretation + " " + full_variant + "\n\n"
+        "Fallback counts a frame if its initial refinement fails and restarts from the previous collision-aware pose. "
+        "The comparison includes runs below 5%. "
         "Penetration is the deepest signed-distance overlap of a hand–screwdriver collision pair "
-        "in Drake’s collision geometry. The drift is the mean Euclidean error in screwdriver "
+        "in Drake’s collision geometry, with zero for a frame without overlap. "
+        "The drift is the mean Euclidean error in screwdriver "
         "coordinates over mapped source keypoints within 10 mm of the collision surface "
         f"({near.sum():,} point-frames). Solve time is elapsed retargeting time per frame, "
         "including geometry and optimization, measured before scoring and rendering. The local "
@@ -143,4 +156,7 @@ def report():
 
 
 if __name__ == "__main__":
-    report()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--topo-run")
+    args = parser.parse_args()
+    report(args.topo_run)

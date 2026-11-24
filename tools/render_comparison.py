@@ -14,13 +14,12 @@ from scipy.spatial.transform import Rotation
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "topo"))
-from compare import CONFIG, VARIANTS, make_retargeter, wuji
+from compare import CONFIG, make_retargeter, wuji
 
 ASSETS = ROOT / "demo_assets"
 LOGS = ROOT / "logs"
 REFERENCE = ROOT / "data/retargeted_traj/wujihand/screwdriver/retargeted_120fps.h5"
-LABELS = ("Keypoint IK", "REGRIND", "Weighted Laplacian", "TopoRetarget-lite")
-ACCENTS = ("#a7bbd2", "#78c7f1", "#93d8bd", "#f6c477")
+ACCENTS = ("#a7bbd2", "#78c7f1", "#93d8bd", "#f6c477", "#e3b1e5")
 FONT_PATH = Path("/System/Library/Fonts/Avenir Next.ttc")
 
 
@@ -101,17 +100,19 @@ def camera_path(motion):
     return gaussian_filter1d(focus, sigma=9, axis=0, mode="nearest")
 
 
-def compose(scene, motions, focuses, i, comparison):
+def compose(scene, motions, focuses, i, comparison, labels):
     if comparison:
         canvas = Image.new("RGB", (1280, 752), "#101923")
         layout = ((24, 73), (648, 73), (24, 405), (648, 405))
         title = "WujiHand screwdriver retargeting"
-        labels, accents = LABELS, ACCENTS
+        if len(motions) == 5:
+            layout = ((24, 73), (440, 73), (856, 73), (232, 405), (648, 405))
+        accents = ACCENTS
     else:
         canvas = Image.new("RGB", (960, 608), "#101923")
         layout = ((24, 73),)
         title = "WujiHand screwdriver reference"
-        labels, accents = ("Shipped REGRIND trajectory",), (ACCENTS[1],)
+        accents = (ACCENTS[1],)
     draw = ImageDraw.Draw(canvas)
     draw.text((24, 14), title, fill="#f1f6fb", font=font(31, True))
     draw.text((canvas.width - 24, 29), f"{i / 120:04.1f} s", fill="#b9cbdc",
@@ -127,34 +128,40 @@ def compose(scene, motions, focuses, i, comparison):
 
 def render(comparison, preview=False):
     if comparison:
-        motions = [np.load(LOGS / f"{variant}.npz")["motion"] for variant in VARIANTS]
-        if len({len(motion) for motion in motions}) != 1:
-            raise ValueError("Comparison trajectories must have identical lengths")
         with np.load(LOGS / "retarget_metrics.npz") as metrics:
             near = metrics["near"]
             drift = metrics["drift"]
-        gap = np.where(near, abs(drift[1] - drift[3]), 0.0).max(axis=1)
+            run_ids = metrics["run_ids"].tolist()
+            labels = metrics["labels"].tolist()
+        motions = []
+        for variant in run_ids:
+            with np.load(LOGS / f"{variant}.npz") as data:
+                motions.append(data["motion"])
+        if len({len(motion) for motion in motions}) != 1:
+            raise ValueError("Comparison trajectories must have identical lengths")
+        gap = np.where(near, np.ptp(drift, axis=0), 0.0).max(axis=1)
         keyframe = int(np.argmax(gaussian_filter1d(gap, sigma=6)))
         filename = "03_side_by_side.mp4"
-        scene = Scene(608, 290)
+        scene = Scene(400 if len(motions) == 5 else 608, 290)
         focus = camera_path(motions[1])
     else:
         motions = [reference_motion()]
+        labels = ["Shipped REGRIND trajectory"]
         filename = "05_reference_mujoco.mp4"
         scene = Scene(912, 480)
         focus = camera_path(motions[0])
     try:
         if preview:
             i = min(280, len(motions[0]) - 1)
-            compose(scene, motions, focus, i, comparison).save(LOGS / "render-preview.png")
+            compose(scene, motions, focus, i, comparison, labels).save(LOGS / "render-preview.png")
             return
         if comparison:
-            compose(scene, motions, focus, keyframe, comparison).save(ASSETS / "04_keyframe.png")
+            compose(scene, motions, focus, keyframe, comparison, labels).save(ASSETS / "04_keyframe.png")
             print(f"Keyframe selected at {keyframe / 120:.2f} s (frame {keyframe})", flush=True)
         with imageio.get_writer(ASSETS / filename, fps=30, codec="libx264", quality=8,
                                 pixelformat="yuv420p", macro_block_size=1, ffmpeg_params=["-movflags", "+faststart"]) as writer:
             for i in range(0, len(motions[0]), 4):
-                writer.append_data(np.asarray(compose(scene, motions, focus, i, comparison)))
+                writer.append_data(np.asarray(compose(scene, motions, focus, i, comparison, labels)))
     finally:
         scene.close()
 
