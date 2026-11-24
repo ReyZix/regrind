@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+state_dir="$HOME/.colab-regrind"
+export CLOUDSDK_CONFIG="$state_dir/gcloud"
+export GOOGLE_APPLICATION_CREDENTIALS="$CLOUDSDK_CONFIG/application_default_credentials.json"
+mkdir -p "$CLOUDSDK_CONFIG"
+
+colab_bin="$(uv tool dir --bin)/colab"
+exec "$colab_bin" --auth adc --config "$state_dir/sessions.json" "$@"
